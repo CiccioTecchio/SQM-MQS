@@ -1,0 +1,252 @@
+---
+title: "Homework 3"
+author: "Francesco Vicidomini"
+date: "1/06/2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+library(lmtest)
+library(readxl)
+library(rminer)
+library(data.table)
+library(gridExtra)
+library(gvlma)
+library(tidyverse)
+library(caret)
+library(knitr)
+library(stats)
+
+
+source("utils.R")
+source("tests.R")
+source("validation.R")
+
+dati <- read_excel("Dataset 1 Use Case Points Benchmark adapted.xlsx", 
+                   col_types = c("skip", "numeric", "numeric", 
+                                 "numeric", "numeric", "numeric"))
+
+## le variabili che utilizzo
+effort<-dati$Effort
+complexActor<-dati$`Complex Actors`
+uaw<-dati$UAW
+avguc<-dati$`Average UC`
+uucw<-dati$UUCW
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1. Dataset
+Il dataset preso in esame è "Use Case Point  Benchmark" esso è composto da 5 variabili, la variabile dipendente è l'**effort** mentre le variabili indipendenti sono Complex Actor, UAW, Average UC(la ritroveremo rinominato con AVGUC) e UUCW. Nel dataset sono presenti 71 osservazioni, dando uno sguardo si può notare che l'osservazione numero 20 presenta il campo "Complex Actor" pari a 0, dato che è impossibile che il valore di questo campo sia 0 assumo che quel valore sia frutto di un osservazione mancante. Per risolvere questo problema sostituisco il valore 0 con un valore rappresentativo del campione esso può essere la media dei valori di ComplexActor essa è pari a 2.6 osservando anche la mediana mi accorgo che essa è pari a 2 quindi decido di sostituire 0 con 2.  
+
+## 1.1 Statistiche descrittive
+Di seguito sono riportate le statistiche descrittive delle variabili considerate e gli scatter plot delle varie variabili indipendenti in relazione con l'effort.
+```{r , echo=FALSE}
+kable(plotTableSummary())
+```
+
+```{r, echo=FALSE}
+for(i in colnames(dati)[-5]) {
+        vec <- excel_to_numeric(dati, i)
+        plot(x = vec, y = effort, xlab = i, ylab = "Effort")
+        tmp_model <- lm(effort ~ vec)
+        abline(tmp_model)
+}
+```
+
+Dagli scatter plot si può notare che le variabili hanno un andamento negativo.
+
+# 1.2 Shapiro Test
+Verifichiamo se i dati hanno una forma normale
+```{r, echo=F}
+#kable(plotTableShapiro(effort, complexActor, uaw, avguc, uucw))
+plotTableShapiro(effort, complexActor, uaw, avguc, uucw)
+```
+
+Possiamo notare che i valori di **p-value** sono inferiori a 0.05 tranne per(AVGUC) proviamo a normalizzare i dati per migliorare i p-value altrimenti saremo costretti a **rigettare** l'ipotesi nulla  
+_H0: i dati presentano un distribuzione normale_.  
+Applico il logaritmo ai dati
+
+```{r, echo=T}
+datiNorm<-log(dati)
+effort_n<-datiNorm$Effort
+complexActor_n<-datiNorm$`Complex Actors`
+uaw_n<-datiNorm$UAW
+avguc_n<-datiNorm$`Average UC`
+uucw_n<-datiNorm$UUCW
+plotTableShapiro(effort_n, complexActor_n, uaw_n, avguc_n, uucw_n)
+```
+
+Si può notare dai dati che si è abbassato anche il p-value di **AVGUC** diventando inferiore di 0.05 quindi possiamo concludere dicendo che non conviene operare sui dati normalizzati.
+
+# 1.3 Statistiche descrittive per i dati normalizzati
+Analizziamo il boxplot(i dati sono stati scalati per favorirne la visualizzazione):
+
+```{r, echo=F}
+boxplot(scale(dati[-5]), main="Dati")
+```
+
+possiamo notare che sono presenti alcuni outliners in Average UC, tuttavia il fatto che siano pochi e che siano presenti solo nella variabile avguc ci consente di portare avanti il nostro studio senza problemi.
+
+# 2 Costruzione del modello
+
+## 2.1. Verifica delle ipotesi
+Per costruire il modello di regressione lineare abbiamo bisogno di verificare le ipotesi di:  
+
+* **linearità**: l'esistenza di una relazione lineare tra la variabile indipendente e la variabile dipendente
+* **omoschedasticità**:	la varianza costante dei termini di errore per tutti i valori della variabile indipendente 
+* **indipendenza**: l'indipendenza statistica degli errori, in particolare, nessuna correlazione tra errori consecutivi
+
+## 2.1.1 Ipotesi di linearità
+Per verificare questa ipotesi si effettua il calcolo dei **coefficienti di Pearson** fra la variabile dipendente(effort) e ogni signola varibile dipendente, il risultato è il seguente:
+
+```{r, echo=F}
+kable(TestLinearita(effort, complexActor, uaw, avguc, uucw))
+```
+
+dai coefficienti di correlazione possiamo notare che i valori hanno un trend negativo, quindi possiamo dire che le variabili sono **negativamente correlate** di conseguenza all'aumentare della variabile dipendente diminuiscono i valori della variabile indipendente ciò si evince anche dagli scatter plot mostrati in precedenza.
+
+## 2.1.2 Ipotesi di multicollinearità
+Per l'ipotesi di multicollinearità utilizziamo il test di Pearson su tutte le variabili indipendenti.
+
+```{r, echo=F}
+kable(cor(dati[-5], method = "pearson"))
+```
+
+Osservando i dati notiamo che la correlazione tra le variabili indipendenti è minore di 1 quindi **non c'è multicollinearità**.
+
+## 2.1.3 Ipotesi di omoschedasticità
+Effettuo il test di Bresh-Pagan per verificare la presenza o l'assenza di omoschedasticità l'ipotesi nulla è  
+_HO: i dati presentano omoschedasticità_
+```{r, echo=F}
+kable(TestOmoschedasticita(effort, complexActor, uaw, avguc, uucw))
+```
+
+I p-value sono tutti minori di 0.05 quindi bisogna **rigettare l'ipotesi nulla** perchè siamo in presenza di eteroschedasticità, una ulteriore conferma ci viene data da *gvlma*
+
+```{r, echo=T}
+g <- gvlma(x= effort ~ complexActor+uaw+avguc+uucw, data=dati)
+g <- display.gvlmatests(g)
+```
+
+Infatti si può notare che l'ipotesi di eteroschedasticità è accettata.
+
+# 3. Multiple linear regression
+Con la multiple linear regression viene costruito un modello di regressione lineare con più variabili, nel nostro caso di studi il modello verrà costruito utilizzando tutte le variabili del dataset  
+    
+```{r, echo=F}
+multiversa <- lm(data = dati, effort ~ complexActor + uaw + avguc + uucw)
+summary(multiversa)
+```
+
+Notiamo che l'$R^2 Adjusted$ pari a 0.4017, è un dato molto basso in quanto un valore buono di $R^2$ è circa 0.7, questo dato ci consete già di capire che, molto probabilmente, il modello costruito non farà delle buone predizioni.  
+Un altro valore di riferimento è il **t-value** esso se superiore a 1.5 ci consente di capire se una variabile indipendente risulta essere **significativa**, possiamo dire che l'unica variabile significativa è UUCW in quanto ha un t-value pari a 2.273.
+Il valore della F-statistic è abbastanza alto pari a 12.75 ma viene contrastato da un p-value molto basso pari a 9.602e-08.
+<!-- AGGIUNGERE ULTERIORI COMMENTI SU F-statistic e p-value e sul come il modello riesca a predire bene o male in base a questi indici-->
+
+# 4. Stepwise linear regression
+Viene costruito un modello predittivo(sempre basato su più variabili indipendenti e una dipendente) dove la scelta delle variabili predittive viene effettuata in modo automatico.
+  
+```{r, echo=F}
+stepwise <- step(lm(effort ~ complexActor+uaw+avguc+uucw), data=dati, direction = "both")
+selectedValue <- stepwise$call$formula
+summary(stepwise)
+paste("Selected Variables =>", toString(selectedValue))
+```
+
+Si può notare che l'$R^2$ è migliorato di un centesimo(0.4104) rispetto alla multiple linear regression, per ottenere questo nuovo risultato la stepwise ha scartato la variabile UAW.  
+Anche se c'è stato solo un lieve migioramento dicido di continuare a lavore sul modello costruito con la stepwise.   
+Possiamo notare che anche F-statistic è aumentato passando a 17.24 anche il p-value è aumentato passando a 2.105e-8.
+<!-- AGGIUNGERE ULTERIORI COMMENTI SU F-statistic e p-value e sul come il modello riesca a predire bene o male in base a questi indici-->
+
+# 5. Analisi dei residui
+
+## 5.1 Normalità dei residui
+Vogliamo verificare se i residui presentano o meno un andamento normale, per verificare l'ipotesi di normalità si applica lo Shapiro-Wilk sui residui del modelle costruito.
+
+```{r, echo=F}
+s <- shapiro.test(resid(stepwise))
+tbl <- matrix(c(as.numeric(s[1]),as.numeric(s[2])), ncol=1, byrow=FALSE)
+rownames(tbl) <- c("W", "p-value")
+kable(tbl)
+```
+
+Notiamo che il p-value ottenuto dallo Shapiro-Wilk è uguale a 0.7362272 poichè questo valore è maggiore di 0.05 devo accettare l'ipotesi nulla ovvero i valori sono normalmente distribuiti.  
+Di seguito viene mostrato lo scatter plot dei residui.
+
+```{r, echo=F}
+plot(fitted(stepwise), resid(stepwise),
+  xlab="Fitted values",
+  ylab="Residuals", 
+main="Scatter plot of Residuals"
+)
+```
+
+## 5.2 Correlazione fra residui
+Per verificare se vi è correllazione fra residui si effettua il Durbin-Watson test(dwtest). Questo test ci restituirà il valore DW se esso è compreso fra 1.50 e 2.50 allora non è presente una correlazione fra residui.
+
+```{r, echo=T}
+dwtest(stepwise, data=dati) 
+```
+
+Possiamo notare che il DW è di 0.70 e il p-value è pari a 1.072e-10, questi valori ci fanno accettare l'ipotesi nulla, quindi si può affermare che i residui presentano correlazione.
+
+## 5.3 Distanza di Cook
+I valori della distanza di Cook possono essere utilizzati per verificare la presenza di outlier nel modello. Il valore di riferimento per la distanza di Cook è **0.05633**(ottento da 4/n dove n è il numero di osservazioni) 
+
+```{r, echo=F}
+cooksD <- cooks.distance(stepwise)
+plot(stepwise, pch = 18, which = c(4))
+abline(h=0.05633, col="blue")
+```
+
+Dal grafico si evince che  le oservazioni numero 2, 3, 62(anche se ha una distanza di cook poco sopra lo 0.05) e 63 sono degli outlier. Fortunatamente gli outliner sono pochi e poco significativi, quindi preferisco andare avanti nel mio studio anzichè rimuoverli.
+
+# 6. Validazione del modello
+
+# 6.1 K-fold cross validation
+Con questo tipo di validazione si va a divedere il dataset in k parti(fold) e ad ogni passo la k-esima parte del dataset diventa il validation set mentre la restante parte del dataset costituisce il training set. Nel nostro caso ho scelto di dividere il dataset in 10 fold, la scelta di utilizzare dieci fold è dettata dal fatto che con 10 fold si ottengo dei valori migliori rispetto ad altri partizionamenti.  
+I valori da considerare sono RMSE misura l'errore di predizione medio effettuato dal modello nel predire una osservazione(più è piccolo il valore dell' RMSE e meglio è), il MAE esso è una alternativa dell'RMSE meno sensibili a valori anomali.  
+Di seguito vengono riportati RMSE, $R^2$, MAE per ogni fold.
+
+```{r, echo = F}
+  c_cross_train <- trainControl(method = "cv", number = 10, savePredictions = TRUE)
+  c_cross_model <- train(Effort~`Complex Actors`+`Average UC`+UUCW, 
+                         data = dati, method = "lm", trControl = c_cross_train)
+  
+  new_model <- c_cross_model$finalModel
+  recap <- c_cross_model$resample
+  kable(recap)
+```
+
+Valori riassuntivi della 10-fold, possiamo notare che l'RMSE e il MAE sono molto alti mentre l'$R^2$ è basso(0.53) ma la sua variavilità non è alta perchè la deviazione standard è di 0.21.
+
+```{r, echo=F}
+c_cross_model
+cat("Standard Deviation: ", sd(c_cross_model$resample$Rsquared))
+ 
+```
+
+# 7. Accuratezza delle predizioni
+Per valutare l'accuratezza delle predizioni confrontiamo l'errore medio e la mediana con l' MRA se l'errore medio e la mediana sono più piccoli di MRA ciò vuol dire che il modello costruito con la stepwise predice **peggio** rispetto a una predizione fatta con la baseline di media e mediana dell'effort.  
+Un buon modello di predizione ha un MMRE inferiore a 0.25 e un Pred maggiore o uguale a 0.75, il nosto valore di MMRE è 0.06 mentre il Pred è uguale a 1 quindi nonostante un valore basso di $R^2$ il modello dovrebbe predire bene ma ne saremo certi solo quando confronteremo l'MRA con l'effort medio e la mediana.  
+Di seguito sono riportati i valori
+
+```{r, echo=F}
+observed_mean <- mean(dati$Effort)
+observed_median <- median(dati$Effort)
+s <- predict(new_model)
+mre <- abs(dati$Effort -s)/dati$Effort # Magnitude of relative error
+mmre <- mean(mre) # Mead magnitude of relative error
+mdmre <- median(mre) # Median magnitude of relative error
+errors <- abs(s - dati$Effort) # Vector of errors/residual
+mra <- mean(errors)
+mean_error <- mean(abs(dati$Effort - observed_mean))
+median_error <- mean(abs(dati$Effort - observed_median))
+pred <- sum(mre <= 0.25)/length(mre)
+final_vector <- c(observed_mean, observed_median, mmre, mdmre, mra, mean_error, median_error, pred)
+
+names(final_vector) <- c("Media Osservazioni", "Mediana Osservazioni", "MMRE", "MDMRE", "MRA", "Errore Medio", "Errore mediana", "Pred")
+kable(final_vector)
+```
+
+Possiamo notare che l'errore medio vale 585.19, la mediana vale 571.94 mentre l'MRA vale 405.37. I valori di media e mediana sono più gradi rispetto all'MRA quindi posso concludere dicendo che nonostante dei buoni valori di MMRE e Pred accettabili, l'accuratezza delle previsioni con la stepwise linear regression sono **peggiori** rispetto alle previsioni effettuate utilizzando media e mediana.
